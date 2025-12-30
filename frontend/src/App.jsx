@@ -11,6 +11,12 @@ function App() {
   const [status, setStatus] = useState({ type: '', msg: '' })
   const [results, setResults] = useState(null)
 
+  // ---------------------------------------------------------
+  // 1. DYNAMIC API URL CONFIGURATION
+  // This automatically switches between Localhost and Render
+  // ---------------------------------------------------------
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
   // Reusable Dropzone Component
   const FileDropzone = ({ file, setFile, label, icon }) => {
     const onDrop = (acceptedFiles) => {
@@ -55,7 +61,8 @@ function App() {
     formData.append('month', month)
 
     try {
-      const response = await axios.post('http://localhost:5000/process', formData)
+      // 2. USE DYNAMIC API_URL HERE
+      const response = await axios.post(`${API_URL}/process`, formData)
       console.log("Success:", response.data)
       setResults(response.data)
       setStatus({ type: 'success', msg: "🎉 Processing Complete! Files are ready below." })
@@ -127,15 +134,17 @@ function App() {
             <h3 className="results-title">Download Reports</h3>
             <div className="download-grid">
               
-              <a href={`http://localhost:5000/download/${results.current_file}`} className="btn-download btn-main" download>
+              {/* 3. USE DYNAMIC API_URL IN DOWNLOAD LINKS */}
+              
+              <a href={`${API_URL}/download/${results.current_file}`} className="btn-download btn-main" download>
                 <span>📥</span> Main Data
               </a>
 
-              <a href={`http://localhost:5000/download/${results.prev_file}`} className="btn-download btn-returns" download>
+              <a href={`${API_URL}/download/${results.prev_file}`} className="btn-download btn-returns" download>
                 <span>↩️</span> Returns Data
               </a>
 
-              <a href={`http://localhost:5000/download/${results.summary_file}`} className="btn-download btn-summary" download>
+              <a href={`${API_URL}/download/${results.summary_file}`} className="btn-download btn-summary" download>
                 <span>📊</span> Pivot Summary
               </a>
 
