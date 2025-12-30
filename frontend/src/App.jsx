@@ -8,37 +8,32 @@ function App() {
   const [filePrev, setFilePrev] = useState(null)
   const [month, setMonth] = useState("DEC 2025")
   const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState("")
-  
-  // This state holds the filenames sent back from the server
+  const [status, setStatus] = useState({ type: '', msg: '' })
   const [results, setResults] = useState(null)
 
-  const FileDropzone = ({ file, setFile, label, color }) => {
+  // Reusable Dropzone Component
+  const FileDropzone = ({ file, setFile, label, icon }) => {
     const onDrop = (acceptedFiles) => {
       setFile(acceptedFiles[0])
-      setResults(null) 
-      setMessage("")
+      setResults(null)
+      setStatus({ type: '', msg: '' })
     }
-    const { getRootProps, getInputProps } = useDropzone({ 
+    const { getRootProps, getInputProps, isDragActive } = useDropzone({ 
       onDrop, 
       multiple: false,
       accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] }
     })
 
     return (
-      <div {...getRootProps()} style={{
-        border: `2px dashed ${color}`, 
-        padding: '30px', 
-        borderRadius: '10px',
-        backgroundColor: file ? '#e8f5e9' : '#f8f9fa',
-        cursor: 'pointer',
-        marginBottom: '15px'
-      }}>
+      <div {...getRootProps()} className={`dropzone ${file ? 'active' : ''} ${isDragActive ? 'drag-active' : ''}`}>
         <input {...getInputProps()} />
+        <div className="icon">{file ? '✅' : icon}</div>
         {file ? (
-          <p style={{ color: "green", fontWeight: "bold", margin: 0 }}>✅ {file.name}</p>
+          <p className="file-name">{file.name}</p>
         ) : (
-          <p style={{ color: "#666", margin: 0 }}>{label}</p>
+          <p className="dropzone-text">
+            {isDragActive ? "Drop it here!" : label}
+          </p>
         )}
       </div>
     )
@@ -46,12 +41,12 @@ function App() {
 
   const handleUpload = async () => {
     if (!fileCurrent || !filePrev) {
-      alert("Please upload BOTH files!")
+      alert("⚠️ Please upload both the Current and Previous month files.")
       return
     }
 
     setLoading(true)
-    setMessage("⏳ Processing... Please wait.")
+    setStatus({ type: 'loading', msg: "⏳ Crunching the numbers... this might take a moment." })
     setResults(null)
 
     const formData = new FormData()
@@ -60,94 +55,95 @@ function App() {
     formData.append('month', month)
 
     try {
-      // We removed 'responseType: blob' because we now expect JSON text
       const response = await axios.post('http://localhost:5000/process', formData)
-      
-      console.log("Server Response:", response.data) // Debugging
+      console.log("Success:", response.data)
       setResults(response.data)
-      setMessage("✅ Processing Done! Download your files below.")
+      setStatus({ type: 'success', msg: "🎉 Processing Complete! Files are ready below." })
     } catch (error) {
       console.error(error)
-      setMessage("❌ Error processing files. Check console.")
+      setStatus({ type: 'error', msg: "❌ Server Error. Please check the backend console." })
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div style={{ maxWidth: "700px", margin: "40px auto", textAlign: "center", fontFamily: "Arial, sans-serif" }}>
-      <h1 style={{ color: "#333" }}>GST Reconciliation Tool</h1>
-      
-      <div style={{ marginBottom: "20px", textAlign: "left" }}>
-        <label style={{ fontWeight: "bold", display: "block", marginBottom: "5px" }}>Current Month Name:</label>
-        <input 
-          type="text" 
-          value={month} 
-          onChange={(e) => setMonth(e.target.value)} 
-          style={{ width: "100%", padding: "10px", fontSize: "16px" }}
-        />
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-        <FileDropzone 
-          file={fileCurrent} 
-          setFile={setFileCurrent} 
-          label="📂 Upload CURRENT Month" 
-          color="#007bff"
-        />
-        <FileDropzone 
-          file={filePrev} 
-          setFile={setFilePrev} 
-          label="📂 Upload PREVIOUS Month" 
-          color="#ff9800"
-        />
-      </div>
-
-      <button 
-        onClick={handleUpload} 
-        disabled={loading}
-        style={{
-          width: "100%",
-          padding: "15px", 
-          fontSize: "18px", 
-          backgroundColor: loading ? "#6c757d" : "#28a745", 
-          color: "white", 
-          border: "none", 
-          borderRadius: "5px",
-          cursor: loading ? "not-allowed" : "pointer",
-          fontWeight: "bold",
-          marginTop: "10px"
-        }}
-      >
-        {loading ? "Processing..." : "RUN PROCESS"}
-      </button>
-
-      {message && <p style={{ marginTop: "20px", fontSize: "18px", fontWeight: "bold" }}>{message}</p>}
-
-      {/* THIS IS THE DOWNLOAD SECTION */}
-      {results && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '20px' }}>
-          
-          <a href={`http://localhost:5000/download/${results.current_file}`} download>
-            <button style={{
-              width: "100%", padding: "15px", fontSize: "16px",
-              backgroundColor: "#007bff", color: "white", border: "none", borderRadius: "5px", cursor: "pointer"
-            }}>
-              📥 Download {month}
-            </button>
-          </a>
-
-          <a href={`http://localhost:5000/download/${results.prev_file}`} download>
-            <button style={{
-              width: "100%", padding: "15px", fontSize: "16px",
-              backgroundColor: "#ff9800", color: "white", border: "none", borderRadius: "5px", cursor: "pointer"
-            }}>
-              📥 Download Prev Month
-            </button>
-          </a>
-
+    <div className="app-container">
+      <div className="card">
+        
+        {/* Header */}
+        <div className="header">
+          <h1>GST Reconciliation Tool</h1>
+          <p>Seamlessly merge, calculate, and analyze your tax data.</p>
         </div>
-      )}
+
+        {/* Month Input */}
+        <div className="input-group">
+          <label className="input-label">Processing Month</label>
+          <input 
+            className="text-input"
+            type="text" 
+            value={month} 
+            onChange={(e) => setMonth(e.target.value)} 
+            placeholder="e.g. DEC 2025"
+          />
+        </div>
+
+        {/* File Upload Area */}
+        <div className="upload-grid">
+          <FileDropzone 
+            file={fileCurrent} 
+            setFile={setFileCurrent} 
+            label="Drag & Drop CURRENT Month File" 
+            icon="📂"
+          />
+          <FileDropzone 
+            file={filePrev} 
+            setFile={setFilePrev} 
+            label="Drag & Drop PREVIOUS Month File" 
+            icon="📅"
+          />
+        </div>
+
+        {/* Action Button */}
+        <button 
+          className="btn-process"
+          onClick={handleUpload} 
+          disabled={loading}
+        >
+          {loading ? "Processing..." : "RUN RECONCILIATION"}
+        </button>
+
+        {/* Status Messages */}
+        {status.msg && (
+          <div className={`status-msg ${status.type}`}>
+            {status.msg}
+          </div>
+        )}
+
+        {/* Results Section */}
+        {results && (
+          <div className="results-section">
+            <h3 className="results-title">Download Reports</h3>
+            <div className="download-grid">
+              
+              <a href={`http://localhost:5000/download/${results.current_file}`} className="btn-download btn-main" download>
+                <span>📥</span> Main Data
+              </a>
+
+              <a href={`http://localhost:5000/download/${results.prev_file}`} className="btn-download btn-returns" download>
+                <span>↩️</span> Returns Data
+              </a>
+
+              <a href={`http://localhost:5000/download/${results.summary_file}`} className="btn-download btn-summary" download>
+                <span>📊</span> Pivot Summary
+              </a>
+
+            </div>
+          </div>
+        )}
+
+      </div>
     </div>
   )
 }
