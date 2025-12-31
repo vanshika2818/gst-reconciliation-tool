@@ -15,9 +15,8 @@ function App() {
   // 1. DYNAMIC API URL CONFIGURATION
   // This automatically switches between Localhost and Render
   // ---------------------------------------------------------
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-
-  // Reusable Dropzone Component
+// FORCE LOCALHOST for testing
+const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';  // Reusable Dropzone Component
   const FileDropzone = ({ file, setFile, label, icon }) => {
     const onDrop = (acceptedFiles) => {
       setFile(acceptedFiles[0])
