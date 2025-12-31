@@ -336,11 +336,10 @@
 
 
 import warnings
-# Silence purely annoyance warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
 
-from flask import Flask, request, send_from_directory, jsonify
+from flask import Flask, request, send_from_directory, jsonify, make_response
 from flask_cors import CORS
 import pandas as pd
 import sqlite3
@@ -352,17 +351,29 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# ENABLE CORS FOR ALL DOMAINS (Fixes Vercel/Render communication issues)
-CORS(app, resources={r"/*": {"origins": "*"}})
+# --- THE NUCLEAR CORS FIX ---
+# 1. Initialize Standard CORS
+CORS(app)
 
+# 2. Manually handle the "Preflight" OPTIONS check
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "*")
+        response.headers.add("Access-Control-Allow-Methods", "*")
+        return response
+
+# 3. Manually add headers to every single response
 @app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+def add_cors_headers(response):
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    response.headers.add("Access-Control-Allow-Headers", "*")
+    response.headers.add("Access-Control-Allow-Methods", "*")
     return response
+# -----------------------------
 
-# USE ABSOLUTE PATHS (Fixes "File Not Found" on Render)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_FOLDER = os.path.join(BASE_DIR, 'outputs')
 
@@ -378,18 +389,12 @@ def get_prev_month_name(month_str):
         return "PREV_MONTH"
 
 def read_file_smart(file_obj):
-    """
-    Smartly detects if the file is CSV or Excel and reads it appropriately.
-    """
     filename = file_obj.filename.lower()
-    
     if filename.endswith('.csv'):
         print(f"   Detected CSV: {file_obj.filename}")
         try:
-            # Try default UTF-8
             return pd.read_csv(file_obj)
         except UnicodeDecodeError:
-            # Fallback to Latin1 if UTF-8 fails
             file_obj.seek(0)
             return pd.read_csv(file_obj, encoding='latin1')
     else:
@@ -397,7 +402,6 @@ def read_file_smart(file_obj):
         return pd.read_excel(file_obj)
 
 def normalize_columns(df):
-    """Standardizes column names."""
     df.columns = [str(c).strip() for c in df.columns]
     col_map = {c.lower().replace("  ", " "): c for c in df.columns}
     renames = {}
@@ -413,26 +417,20 @@ def normalize_columns(df):
     if 'hsn' in col_map: renames[col_map['hsn']] = 'HSN'
     if 'shipping province' in col_map: renames[col_map['shipping province']] = 'Shipping_Province'
 
-    # Map existing Taxable column if present
     tax_cols = [c for c in df.columns if c.strip().upper() in ['TAXABLE', 'TAXABLE AMOUNT', 'TAXABLE_AMOUNT']]
     if tax_cols: 
         renames[tax_cols[0]] = 'Taxable_Amount'
 
     if renames: df.rename(columns=renames, inplace=True)
     df.columns = [c.replace(" ", "_") for c in df.columns]
-    
     df = df.loc[:, ~df.columns.duplicated()]
     return df
 
 def prepare_sql_data(df):
     df = normalize_columns(df)
-    
     if 'Total' in df.columns:
         df['Total'] = pd.to_numeric(df['Total'], errors='coerce').fillna(0)
-    
-    # Calculate Taxable Amount (No Rounding to preserve Sum precision)
     df['Taxable_Amount'] = (df['Total'] / 1.18)
-    
     df_str = df.astype(str)
     conn = sqlite3.connect(":memory:")
     df_str.to_sql("processed_data", conn, index=False, if_exists="replace")
@@ -462,25 +460,18 @@ def reorder_columns_first(df, col_name):
     return df
 
 def filter_positive_only(df):
-    """Removes rows where Taxable_Amount is strictly less than 0."""
     if 'Taxable_Amount' in df.columns:
         temp_numeric = pd.to_numeric(df['Taxable_Amount'], errors='coerce').fillna(0)
         df = df[temp_numeric >= 0].copy()
     return df
 
 def process_prev_month_returns(file_storage, month_label):
-    # PREVIOUS FILE MUST BE EXCEL because we rely on Sheet Names (HR/UP)
-    # If user uploads CSV here, we can't find sheets.
-    
     filename = file_storage.filename.lower()
     if filename.endswith('.csv'):
-        # Fallback: If they upload CSV, return empty returns to prevent crash
-        print("⚠️ Warning: Previous file is CSV. Cannot extract HR/UP Sheets. Skipping Returns.")
         return pd.DataFrame(), pd.DataFrame()
 
     xl = pd.ExcelFile(file_storage)
     sheet_names = xl.sheet_names
-    
     df_hr_returns = pd.DataFrame()
     df_up_returns = pd.DataFrame()
     target_keywords = ['cancelled', 'free order', 'lost', 'refunded', 'rtoed']
@@ -488,16 +479,12 @@ def process_prev_month_returns(file_storage, month_label):
     hr_sheet = next((s for s in sheet_names if "HR" in s.upper() and "GSTR1" in s.upper() and "PVT" not in s.upper()), None)
     up_sheet = next((s for s in sheet_names if "UP" in s.upper() and "GSTR1" in s.upper() and "PVT" not in s.upper()), None)
 
-    # --- PROCESS HR ---
     if hr_sheet:
-        print(f"   Reading HR Sheet: {hr_sheet}")
         df_raw = pd.read_excel(xl, sheet_name=hr_sheet)
         df_raw = normalize_columns(df_raw)
-        
         if 'Total' in df_raw.columns:
              df_raw['Total'] = pd.to_numeric(df_raw['Total'], errors='coerce').fillna(0)
              df_raw['Taxable_Amount'] = (df_raw['Total'] / 1.18)
-
         if 'Updated_Status' in df_raw.columns:
             status_col = df_raw['Updated_Status'].astype(str).str.lower().str.strip()
             df_ret = df_raw[status_col.isin(target_keywords)].copy()
@@ -510,16 +497,12 @@ def process_prev_month_returns(file_storage, month_label):
                     df_ret = reorder_columns_first(df_ret, 'Month')
                     df_hr_returns = convert_to_returns(df_ret)
 
-    # --- PROCESS UP ---
     if up_sheet:
-        print(f"   Reading UP Sheet: {up_sheet}")
         df_raw = pd.read_excel(xl, sheet_name=up_sheet)
         df_raw = normalize_columns(df_raw)
-        
         if 'Total' in df_raw.columns:
              df_raw['Total'] = pd.to_numeric(df_raw['Total'], errors='coerce').fillna(0)
              df_raw['Taxable_Amount'] = (df_raw['Total'] / 1.18)
-
         if 'Updated_Status' in df_raw.columns:
             status_col = df_raw['Updated_Status'].astype(str).str.lower().str.strip()
             df_ret = df_raw[status_col.isin(target_keywords)].copy()
@@ -531,35 +514,25 @@ def process_prev_month_returns(file_storage, month_label):
                     df_ret['Month'] = month_label
                     df_ret = reorder_columns_first(df_ret, 'Month')
                     df_up_returns = convert_to_returns(df_ret)
-
     return df_hr_returns, df_up_returns
 
 def process_current_month(df):
     conn = prepare_sql_data(df)
     df_whole = pd.read_sql_query("SELECT * FROM processed_data", conn)
-
     try:
         df_hr = pd.read_sql_query("""
             SELECT * FROM processed_data WHERE 
             TRIM(UPPER(Courier_Status)) IN ('DELIVERED', 'INTRANSIT', 'IN TRANSIT', 'YET TO BE PICKUP', 'YET TO PICKUP')
-            AND 
-            (
-                TRIM(UPPER(Pickup_Location)) IN ('FAR_LF', 'GLAUCUS GURGAON WAREHOUSE 3', 'YET TO BE PICKUP', 'YET TO PICKUP')
-                OR 
-                TRIM(UPPER(Pickup_Location)) LIKE '%HARYANA%'
-            )
+            AND (TRIM(UPPER(Pickup_Location)) IN ('FAR_LF', 'GLAUCUS GURGAON WAREHOUSE 3', 'YET TO BE PICKUP', 'YET TO PICKUP') OR TRIM(UPPER(Pickup_Location)) LIKE '%HARYANA%')
         """, conn)
     except: df_hr = pd.DataFrame()
-
     try:
         df_up = pd.read_sql_query("""
             SELECT * FROM processed_data WHERE 
             TRIM(UPPER(Courier_Status)) IN ('DELIVERED', 'INTRANSIT', 'IN TRANSIT', 'YET TO BE PICKUP', 'YET TO PICKUP')
-            AND 
-            TRIM(UPPER(Pickup_Location)) = 'NOIDA G-202'
+            AND TRIM(UPPER(Pickup_Location)) = 'NOIDA G-202'
         """, conn)
     except: df_up = pd.DataFrame()
-    
     conn.close()
     return df_whole, df_hr, df_up
 
@@ -567,78 +540,59 @@ def generate_pivot_summary(df_merged):
     conn = sqlite3.connect(":memory:")
     if 'Taxable_Amount' in df_merged.columns:
         df_merged['Taxable_Amount'] = pd.to_numeric(df_merged['Taxable_Amount'], errors='coerce').fillna(0)
-    
     df_merged.to_sql("data", conn, index=False, if_exists="replace")
-    
     query = """
-        SELECT 
-            Shipping_Province,
+        SELECT Shipping_Province,
             SUM(CASE WHEN Source_Warehouse = 'HR' THEN Taxable_Amount ELSE 0 END) as HR_Net_Taxable,
             SUM(CASE WHEN Source_Warehouse = 'UP' THEN Taxable_Amount ELSE 0 END) as UP_Net_Taxable,
             SUM(Taxable_Amount) as Total_Combined
-        FROM data
-        WHERE Shipping_Province IS NOT NULL
-        GROUP BY Shipping_Province
-        ORDER BY Shipping_Province ASC
+        FROM data WHERE Shipping_Province IS NOT NULL GROUP BY Shipping_Province ORDER BY Shipping_Province ASC
     """
     try:
         df_summary = pd.read_sql_query(query, conn)
-    except Exception as e:
-        print(f"Pivot Error: {e}")
-        df_summary = pd.DataFrame()
+    except: df_summary = pd.DataFrame()
     conn.close()
     return df_summary
 
 def clean_and_format_final(df):
     cols = ['Total', 'Taxable_Amount', 'Lineitem_quantity']
     for c in cols:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors='coerce')
+        if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce')
     df = fix_booleans(df)
-    if 'Source_Warehouse' in df.columns:
-        df.drop(columns=['Source_Warehouse'], inplace=True)
+    if 'Source_Warehouse' in df.columns: df.drop(columns=['Source_Warehouse'], inplace=True)
     return df
 
 def append_with_gap(df_main, df_append):
     if df_append.empty: return df_main
     blank_row = pd.DataFrame([np.nan], index=[0]) 
-    combined = pd.concat([df_main, blank_row, df_append], ignore_index=True)
-    return combined
+    return pd.concat([df_main, blank_row, df_append], ignore_index=True)
 
 def save_processed_excel(whole, hr, up, month_name, filename):
     filepath = os.path.join(OUTPUT_FOLDER, filename)
-    whole = clean_and_format_final(whole)
-    hr = clean_and_format_final(hr)
-    up = clean_and_format_final(up)
     with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
-        up.to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF UP PVT", index=False)
-        up.to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF UP", index=False)
-        hr.to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF HR PVT", index=False)
-        hr.to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF HR", index=False)
-        whole.to_excel(writer, sheet_name=f"{month_name} WHOLE DATA", index=False)
+        clean_and_format_final(up).to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF UP PVT", index=False)
+        clean_and_format_final(up).to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF UP", index=False)
+        clean_and_format_final(hr).to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF HR PVT", index=False)
+        clean_and_format_final(hr).to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF HR", index=False)
+        clean_and_format_final(whole).to_excel(writer, sheet_name=f"{month_name} WHOLE DATA", index=False)
     return filename
 
 def save_returns_excel(hr, up, month_name, filename):
     filepath = os.path.join(OUTPUT_FOLDER, filename)
-    hr = clean_and_format_final(hr)
-    up = clean_and_format_final(up)
     with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
-        hr.to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF HR", index=False)
-        up.to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF UP", index=False)
+        clean_and_format_final(hr).to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF HR", index=False)
+        clean_and_format_final(up).to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF UP", index=False)
     return filename
 
 def save_summary_only(summary, filename):
     filepath = os.path.join(OUTPUT_FOLDER, filename)
-    for c in summary.columns:
-        if "Taxable" in c or "Total" in c: 
-            summary[c] = pd.to_numeric(summary[c], errors='coerce')
     with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
         summary.to_excel(writer, sheet_name="SUMMARY_PIVOT", index=False)
     return filename
 
 @app.route('/', methods=['GET'])
 def home():
-    return "<h1>✅ GST Backend is Running with CSV Support!</h1>"
+    return "<h1>✅ GST Backend Running - CORS Patch Applied!</h1>"
 
 @app.route('/process', methods=['POST'])
 def process_files():
@@ -651,27 +605,16 @@ def process_files():
         curr_month = request.form.get('month', 'DEC 2025').upper()
         prev_month = get_prev_month_name(curr_month)
         
-        print(f"Processing Current Month ({curr_month})...")
-        
-        # 1. READ FILE SMARTLY (CSV or Excel)
         df_curr_raw = read_file_smart(file_curr)
-        
         c_whole, c_hr, c_up = process_current_month(df_curr_raw)
-        
-        print(f"Processing Previous Month Returns ({prev_month})...")
-        # Note: file_prev should still be Excel ideally
         p_hr_returns, p_up_returns = process_prev_month_returns(file_prev, prev_month)
 
-        c_hr['Source_Warehouse'] = 'HR'
-        p_hr_returns['Source_Warehouse'] = 'HR'
-        c_up['Source_Warehouse'] = 'UP'
-        p_up_returns['Source_Warehouse'] = 'UP'
+        c_hr['Source_Warehouse'], p_hr_returns['Source_Warehouse'] = 'HR', 'HR'
+        c_up['Source_Warehouse'], p_up_returns['Source_Warehouse'] = 'UP', 'UP'
 
-        print("Generating Split Pivot Summary...")
         all_data = pd.concat([c_hr, p_hr_returns, c_up, p_up_returns], ignore_index=True)
         df_summary = generate_pivot_summary(all_data)
 
-        print("Merging Returns into Current Sheets...")
         final_hr = append_with_gap(c_hr, p_hr_returns)
         final_up = append_with_gap(c_up, p_up_returns)
         
@@ -701,6 +644,5 @@ def download_file(filename):
     return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True)
 
 if __name__ == '__main__':
-    # Use environment port for Render, default to 5000 for local
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
