@@ -9,7 +9,9 @@ from dateutil.relativedelta import relativedelta
 from datetime import datetime
 
 app = Flask(__name__)
-CORS(app)
+# CORS(app)
+
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 OUTPUT_FOLDER = 'outputs'
 if not os.path.exists(OUTPUT_FOLDER):
