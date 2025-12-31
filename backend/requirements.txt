@@ -5,3 +5,4 @@ openpyxl
 python-dateutil
 gunicorn
 numpy
+xlsxwriter
