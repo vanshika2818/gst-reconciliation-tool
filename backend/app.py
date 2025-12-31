@@ -339,8 +339,8 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
 
-from flask import Flask, request, send_from_directory, jsonify, make_response
-from flask_cors import CORS
+from flask import Flask, request, send_from_directory, jsonify
+from flask_cors import CORS, cross_origin  # <--- IMPORT cross_origin
 import pandas as pd
 import sqlite3
 import io
@@ -351,28 +351,8 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# --- THE NUCLEAR CORS FIX ---
-# 1. Initialize Standard CORS
+# Basic Global CORS (Keep this simple)
 CORS(app)
-
-# 2. Manually handle the "Preflight" OPTIONS check
-@app.before_request
-def handle_preflight():
-    if request.method == "OPTIONS":
-        response = make_response()
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "*")
-        response.headers.add("Access-Control-Allow-Methods", "*")
-        return response
-
-# 3. Manually add headers to every single response
-@app.after_request
-def add_cors_headers(response):
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    response.headers.add("Access-Control-Allow-Headers", "*")
-    response.headers.add("Access-Control-Allow-Methods", "*")
-    return response
-# -----------------------------
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_FOLDER = os.path.join(BASE_DIR, 'outputs')
@@ -380,6 +360,7 @@ OUTPUT_FOLDER = os.path.join(BASE_DIR, 'outputs')
 if not os.path.exists(OUTPUT_FOLDER):
     os.makedirs(OUTPUT_FOLDER)
 
+# --- HELPER FUNCTIONS (No changes here) ---
 def get_prev_month_name(month_str):
     try:
         dt = datetime.strptime(month_str, "%b %Y")
@@ -391,14 +372,12 @@ def get_prev_month_name(month_str):
 def read_file_smart(file_obj):
     filename = file_obj.filename.lower()
     if filename.endswith('.csv'):
-        print(f"   Detected CSV: {file_obj.filename}")
         try:
             return pd.read_csv(file_obj)
         except UnicodeDecodeError:
             file_obj.seek(0)
             return pd.read_csv(file_obj, encoding='latin1')
     else:
-        print(f"   Detected Excel: {file_obj.filename}")
         return pd.read_excel(file_obj)
 
 def normalize_columns(df):
@@ -592,9 +571,13 @@ def save_summary_only(summary, filename):
 
 @app.route('/', methods=['GET'])
 def home():
-    return "<h1>✅ GST Backend Running - CORS Patch Applied!</h1>"
+    return "<h1>✅ GST Backend Running - Decorator Patch Applied!</h1>"
 
-@app.route('/process', methods=['POST'])
+# --- THE FIX IS HERE ---
+# 1. Add OPTIONS to methods
+# 2. Use @cross_origin() decorator
+@app.route('/process', methods=['POST', 'OPTIONS'])
+@cross_origin() 
 def process_files():
     try:
         if 'file_current' not in request.files or 'file_prev' not in request.files:
