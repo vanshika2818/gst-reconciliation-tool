@@ -16,7 +16,7 @@ function App() {
   // This automatically switches between Localhost and Render
   // ---------------------------------------------------------
 // FORCE LOCALHOST for testing
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';  // Reusable Dropzone Component
+const API_URL = 'http://127.0.0.1:5000';
   const FileDropzone = ({ file, setFile, label, icon }) => {
     const onDrop = (acceptedFiles) => {
       setFile(acceptedFiles[0])
