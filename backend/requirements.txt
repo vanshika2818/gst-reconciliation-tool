@@ -3,6 +3,5 @@ flask-cors
 pandas
 openpyxl
 python-dateutil
-gunicorn
 numpy
 xlsxwriter
