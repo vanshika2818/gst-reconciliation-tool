@@ -8,35 +8,37 @@ echo ==========================================
 echo [1/3] Setting up Backend...
 cd backend
 
-:: Create virtual environment if it doesn't exist
 if not exist venv (
     echo    Creating Python virtual environment...
     python -m venv venv
 )
 
-:: Activate venv and install requirements
 call venv\Scripts\activate
-echo    Installing backend dependencies (this may take a moment)...
-pip install -r requirements.txt > nul 2>&1
+echo    Installing backend dependencies...
+pip install -r requirements.txt
 
-:: Start Flask App in a new window
 echo    Starting Backend Server on Port 5000...
 start "GST Backend Server" cmd /k "python app.py"
 
-:: Go back to root
 cd ..
 
 :: --- 2. Start Frontend Server ---
 echo [2/3] Setting up Frontend...
 cd frontend
 
-:: Install node_modules if missing
+:: FORCE INSTALL if node_modules is missing OR if vite is missing
 if not exist node_modules (
-    echo    Installing frontend dependencies...
-    call npm install > nul 2>&1
+    echo    First time setup: Installing ALL dependencies...
+    call npm install
 )
 
-:: Start React App in a new window
+:: SAFETY CHECK: If Vite is still missing, install it explicitly
+if not exist node_modules\.bin\vite.cmd (
+    echo    [Reparing] Vite not found. Installing Vite manually...
+    call npm install vite --save-dev
+)
+
+:: Start React App
 echo    Starting Frontend Server...
 start "GST Frontend Server" cmd /k "npm run dev"
 
