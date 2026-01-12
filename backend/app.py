@@ -8,14 +8,66 @@ import numpy as np
 from dateutil.relativedelta import relativedelta
 from datetime import datetime
 
-app = Flask(__name__)
-# CORS(app)
+# --- CONFIGURATION ---
+# Default to port 5000 for local development, can be overridden by env var
+PORT = int(os.environ.get("PORT", 5000))
 
+app = Flask(__name__, static_folder="../frontend/dist", static_url_path="")
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 OUTPUT_FOLDER = 'outputs'
 if not os.path.exists(OUTPUT_FOLDER):
     os.makedirs(OUTPUT_FOLDER)
+
+# --- STATE MAPPING DICTIONARY (Short Code -> Full Name) ---
+STATE_MAP = {
+    # Valid State Codes
+    "AN": "ANDAMAN AND NICOBAR ISLANDS",
+    "AP": "ANDHRA PRADESH",
+    "AR": "ARUNACHAL PRADESH",
+    "AS": "ASSAM",
+    "BR": "BIHAR",
+    "CH": "CHANDIGARH",
+    "CG": "CHHATTISGARH",
+    "CT": "CHHATTISGARH",      # Common Variant
+    "DN": "DADRA AND NAGAR HAVELI",
+    "DD": "DAMAN AND DIU",
+    "DL": "DELHI",
+    "GA": "GOA",
+    "GJ": "GUJARAT",
+    "HR": "HARYANA",
+    "HP": "HIMACHAL PRADESH",
+    "JK": "JAMMU AND KASHMIR",
+    "JH": "JHARKHAND",
+    "KA": "KARNATAKA",
+    "KL": "KERALA",
+    "LA": "LADAKH",
+    "LD": "LAKSHADWEEP",
+    "MP": "MADHYA PRADESH",
+    "MH": "MAHARASHTRA",
+    "MN": "MANIPUR",
+    "ML": "MEGHALAYA",
+    "MZ": "MIZORAM",
+    "NL": "NAGALAND",
+    "OD": "ODISHA",
+    "OR": "ODISHA",            # Legacy Code for Orissa -> Odisha
+    "PY": "PUDUCHERRY",
+    "PB": "PUNJAB",
+    "RJ": "RAJASTHAN",
+    "SK": "SIKKIM",
+    "TN": "TAMIL NADU",
+    "TS": "TELANGANA",
+    "TR": "TRIPURA",
+    "UP": "UTTAR PRADESH",
+    "UK": "UTTARAKHAND",
+    "UA": "UTTARAKHAND",       # Common Variant
+    "WB": "WEST BENGAL",
+    "AG": "Agrigento", # Placeholder for AG
+}
+
+@app.route('/')
+def serve_frontend():
+    return send_from_directory(app.static_folder, 'index.html')
 
 def get_prev_month_name(month_str):
     try:
@@ -26,7 +78,7 @@ def get_prev_month_name(month_str):
         return "PREV_MONTH"
 
 def normalize_columns(df):
-    """Standardizes column names."""
+    """Standardizes column names and Fixes State Names."""
     df.columns = [str(c).strip() for c in df.columns]
     col_map = {c.lower().replace("  ", " "): c for c in df.columns}
     renames = {}
@@ -50,6 +102,20 @@ def normalize_columns(df):
     if renames: df.rename(columns=renames, inplace=True)
     df.columns = [c.replace(" ", "_") for c in df.columns]
     
+    # --- NEW: Fix Merged Cells & State Codes ---
+    if 'Shipping_Province' in df.columns:
+        # 1. FIX MERGED CELLS (Copy value down to empty rows)
+        df['Shipping_Province'] = df['Shipping_Province'].replace(r'^\s*$', np.nan, regex=True).ffill()
+
+        # 2. Convert to string and clean
+        df['Shipping_Province'] = df['Shipping_Province'].astype(str).str.strip().str.upper()
+        
+        # 3. Replace using the STATE_MAP dictionary
+        df['Shipping_Province'] = df['Shipping_Province'].replace(STATE_MAP)
+
+        # 4. Remove literal "NAN" strings if they still exist
+        df['Shipping_Province'] = df['Shipping_Province'].replace({'NAN': '', 'nan': ''})
+
     df = df.loc[:, ~df.columns.duplicated()]
     return df
 
@@ -194,29 +260,51 @@ def process_current_month(df):
 
 def generate_pivot_summary(df_merged):
     conn = sqlite3.connect(":memory:")
+    
+    # Ensure numeric columns before querying
     if 'Taxable_Amount' in df_merged.columns:
         df_merged['Taxable_Amount'] = pd.to_numeric(df_merged['Taxable_Amount'], errors='coerce').fillna(0)
+    if 'Lineitem_quantity' in df_merged.columns:
+        df_merged['Lineitem_quantity'] = pd.to_numeric(df_merged['Lineitem_quantity'], errors='coerce').fillna(0)
     
     df_merged.to_sql("data", conn, index=False, if_exists="replace")
     
-    query = """
+    # --- QUERY FOR HR SUMMARY (With Items & Quantity) ---
+    query_hr = """
         SELECT 
             Shipping_Province,
-            SUM(CASE WHEN Source_Warehouse = 'HR' THEN Taxable_Amount ELSE 0 END) as HR_Net_Taxable,
-            SUM(CASE WHEN Source_Warehouse = 'UP' THEN Taxable_Amount ELSE 0 END) as UP_Net_Taxable,
-            SUM(Taxable_Amount) as Total_Combined
+            Lineitem_name,
+            SUM(Lineitem_quantity) as Total_Quantity,
+            SUM(Taxable_Amount) as Total_Taxable
         FROM data
-        WHERE Shipping_Province IS NOT NULL
-        GROUP BY Shipping_Province
-        ORDER BY Shipping_Province ASC
+        WHERE Source_Warehouse = 'HR' AND Shipping_Province IS NOT NULL
+        GROUP BY Shipping_Province, Lineitem_name
+        ORDER BY Shipping_Province ASC, Lineitem_name ASC
     """
+    
+    # --- QUERY FOR UP SUMMARY (With Items & Quantity) ---
+    query_up = """
+        SELECT 
+            Shipping_Province,
+            Lineitem_name,
+            SUM(Lineitem_quantity) as Total_Quantity,
+            SUM(Taxable_Amount) as Total_Taxable
+        FROM data
+        WHERE Source_Warehouse = 'UP' AND Shipping_Province IS NOT NULL
+        GROUP BY Shipping_Province, Lineitem_name
+        ORDER BY Shipping_Province ASC, Lineitem_name ASC
+    """
+
     try:
-        df_summary = pd.read_sql_query(query, conn)
+        df_summary_hr = pd.read_sql_query(query_hr, conn)
+        df_summary_up = pd.read_sql_query(query_up, conn)
     except Exception as e:
         print(f"Pivot Error: {e}")
-        df_summary = pd.DataFrame()
+        df_summary_hr = pd.DataFrame()
+        df_summary_up = pd.DataFrame()
+        
     conn.close()
-    return df_summary
+    return df_summary_hr, df_summary_up
 
 def clean_and_format_final(df):
     cols = ['Total', 'Taxable_Amount', 'Lineitem_quantity']
@@ -241,9 +329,7 @@ def save_processed_excel(whole, hr, up, month_name, filename):
     hr = clean_and_format_final(hr)
     up = clean_and_format_final(up)
     with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
-        # up.to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF UP PVT", index=False)
         up.to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF UP", index=False)
-        # hr.to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF HR PVT", index=False)
         hr.to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF HR", index=False)
         whole.to_excel(writer, sheet_name=f"{month_name} WHOLE DATA", index=False)
     return filename
@@ -257,13 +343,20 @@ def save_returns_excel(hr, up, month_name, filename):
         up.to_excel(writer, sheet_name=f"{month_name} GSTR1 LEAF UP", index=False)
     return filename
 
-def save_summary_only(summary, filename):
+def save_summary_only(hr_summary, up_summary, filename):
     filepath = os.path.join(OUTPUT_FOLDER, filename)
-    for c in summary.columns:
-        if "Taxable" in c or "Total" in c: 
-            summary[c] = pd.to_numeric(summary[c], errors='coerce')
+    
     with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
-        summary.to_excel(writer, sheet_name="SUMMARY_PIVOT", index=False)
+        if not hr_summary.empty:
+            hr_summary.to_excel(writer, sheet_name="HR_Itemized_Summary", index=False)
+        else:
+            pd.DataFrame({'Message': ['No Data']}).to_excel(writer, sheet_name="HR_Itemized_Summary", index=False)
+            
+        if not up_summary.empty:
+            up_summary.to_excel(writer, sheet_name="UP_Itemized_Summary", index=False)
+        else:
+            pd.DataFrame({'Message': ['No Data']}).to_excel(writer, sheet_name="UP_Itemized_Summary", index=False)
+            
     return filename
 
 @app.route('/process', methods=['POST'])
@@ -291,7 +384,9 @@ def process_files():
 
         print("Generating Split Pivot Summary...")
         all_data = pd.concat([c_hr, p_hr_returns, c_up, p_up_returns], ignore_index=True)
-        df_summary = generate_pivot_summary(all_data)
+        
+        # --- NEW: Get Tuple of DataFrames (HR, UP) ---
+        df_hr_summary, df_up_summary = generate_pivot_summary(all_data)
 
         print("Merging Returns into Current Sheets...")
         final_hr = append_with_gap(c_hr, p_hr_returns)
@@ -304,7 +399,8 @@ def process_files():
         save_returns_excel(p_hr_returns, p_up_returns, prev_month, prev_filename)
         
         summary_filename = f"Summary_{curr_month.replace(' ', '_')}.xlsx"
-        save_summary_only(df_summary, summary_filename)
+        # --- NEW: Pass both summaries ---
+        save_summary_only(df_hr_summary, df_up_summary, summary_filename)
 
         return jsonify({
             "message": "Processing Complete",
@@ -323,9 +419,4 @@ def download_file(filename):
     return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True)
 
 if __name__ == '__main__':
-    # Use the PORT environment variable provided by Render, default to 5000
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
-
-
-
+    app.run(host='0.0.0.0', port=PORT)
